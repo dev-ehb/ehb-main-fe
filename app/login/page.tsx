@@ -1,0 +1,402 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { Suspense } from 'react';
+import { ehbApi, verifyStoredToken, getStoredEhbToken } from '@/lib/api';
+import { Loader2, Eye, EyeOff } from 'lucide-react';
+
+const schema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+type FormValues = z.infer<typeof schema>;
+
+const platformLabels: Record<string, string> = {
+  gosellr: 'GoSellr',
+  ols: 'OLS — Legal Marketplace',
+  hps: 'HPS — Healthcare',
+  jps: 'JPS — Workforce',
+  wms: 'WMS — Hospital Management',
+  obs: 'OBS — Book Retail',
+  franchises: 'EHB Franchises',
+};
+
+// Static lookup so Next.js can inline each NEXT_PUBLIC_* var at build time.
+// (Dynamic process.env[key] access is never inlined by the Next.js bundler.)
+const PLATFORM_CALLBACK_URLS: Record<string, string> = {
+  gosellr:    process.env.NEXT_PUBLIC_CALLBACK_GOSELLR    ?? 'http://localhost:4002/callback',
+  ols:        process.env.NEXT_PUBLIC_CALLBACK_OLS        ?? 'http://localhost:4003/callback',
+  jps:        process.env.NEXT_PUBLIC_CALLBACK_JPS        ?? 'http://localhost:4006/callback',
+  hps:        process.env.NEXT_PUBLIC_CALLBACK_HPS        ?? 'http://localhost:4004/callback',
+  wms:        process.env.NEXT_PUBLIC_CALLBACK_WMS        ?? 'http://localhost:4005/callback',
+  obs:        process.env.NEXT_PUBLIC_CALLBACK_OBS        ?? 'http://localhost:4007/callback',
+  franchises: process.env.NEXT_PUBLIC_CALLBACK_FRANCHISES ?? 'http://localhost:4010/callback',
+};
+
+function buildCallbackUrl(platformId: string, token: string): string | null {
+  const base = PLATFORM_CALLBACK_URLS[platformId];
+  if (!base) return null; // unknown platform — surface the error instead of silently bouncing to GoSellr
+  return `${base}?ehb_token=${encodeURIComponent(token)}`;
+}
+
+function LoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectPlatform = searchParams.get('redirect') ?? undefined;
+  const justRegistered = searchParams.get('registered') === '1';
+  const platformLabel = redirectPlatform
+    ? (platformLabels[redirectPlatform] ?? redirectPlatform)
+    : null;
+
+  const [checkingSession, setCheckingSession] = useState(!!redirectPlatform);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({ resolver: zodResolver(schema) });
+
+  useEffect(() => {
+    if (!redirectPlatform) {
+      setCheckingSession(false);
+      return;
+    }
+    const storedToken = getStoredEhbToken();
+    if (!storedToken) {
+      setCheckingSession(false);
+      return;
+    }
+    verifyStoredToken().then((user) => {
+      if (user) {
+        const url = buildCallbackUrl(redirectPlatform, storedToken);
+        if (url) {
+          window.location.href = url;
+          return;
+        }
+      }
+      setCheckingSession(false);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onSubmit = async (data: FormValues) => {
+    try {
+      const res = await ehbApi.login(data, redirectPlatform);
+      if (res.redirect_url) {
+        window.location.href = res.redirect_url;
+      } else {
+        router.push('/dashboard');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Login failed';
+      setError('root', { message });
+    }
+  };
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#191A27' }}>
+        <div className="flex items-center gap-2 text-sm" style={{ color: '#9EA3C0' }}>
+          <Loader2 className="h-5 w-5 animate-spin" style={{ color: '#7C6EFF' }} />
+          Checking session…
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex" style={{ background: '#191A27' }}>
+
+      {/* ── LEFT: Form Panel ── */}
+      <div className="flex flex-col justify-center w-full lg:w-1/2 px-8 sm:px-16 xl:px-24 py-12">
+        <div className="max-w-sm w-full mx-auto space-y-7">
+
+          {/* Logo mark */}
+          <div className="flex items-center gap-2.5 mb-2">
+            <div
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-sm font-bold"
+              style={{ background: 'linear-gradient(135deg, #7C6EFF 0%, #B59BF5 100%)', color: '#fff' }}
+            >
+              E
+            </div>
+            <span className="font-bold" style={{ fontSize: 16, color: '#EEEEF8' }}>EHB Portal</span>
+          </div>
+
+          {/* Heading */}
+          <div className="space-y-2">
+            <h1 className="font-bold tracking-tight" style={{ fontSize: 30, color: '#EEEEF8' }}>
+              Welcome back
+            </h1>
+            <p className="leading-relaxed" style={{ fontSize: 13, color: '#7070A0' }}>
+              Simplify your workflow and boost your productivity with{' '}
+              <span style={{ color: '#A0A3C4', fontWeight: 600 }}>EHB&apos;s App</span>.
+              Get started for free.
+            </p>
+          </div>
+
+          {/* Banners */}
+          {justRegistered && (
+            <div
+              className="rounded-xl px-4 py-2.5 text-sm"
+              style={{ background: 'rgba(76,175,80,0.10)', border: '1px solid rgba(76,175,80,0.25)', color: '#4CAF50' }}
+            >
+              Account created! Please sign in.
+            </div>
+          )}
+          {platformLabel && (
+            <div
+              className="rounded-xl px-4 py-2.5 text-sm"
+              style={{ background: 'rgba(124,110,255,0.10)', border: '1px solid rgba(124,110,255,0.30)', color: '#B59BF5' }}
+            >
+              Redirected from <span className="font-semibold">{platformLabel}</span>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+
+            {/* Email */}
+            <div>
+              <input
+                id="email"
+                type="email"
+                placeholder="Email address"
+                {...register('email')}
+                className="w-full outline-none transition"
+                style={{
+                  background: '#1D1E2E',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 12,
+                  padding: '12px 16px',
+                  fontSize: 13,
+                  color: '#EEEEF8',
+                }}
+                onFocus={e => { e.currentTarget.style.border = '1px solid rgba(124,110,255,0.5)'; }}
+                onBlur={e => { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)'; }}
+              />
+              {errors.email && (
+                <p className="mt-1 ml-1 text-xs" style={{ color: '#EF4444' }}>{errors.email.message}</p>
+              )}
+            </div>
+
+            {/* Password */}
+            <div>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Password"
+                  {...register('password')}
+                  className="w-full outline-none transition pr-12"
+                  style={{
+                    background: '#1D1E2E',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 12,
+                    padding: '12px 16px',
+                    fontSize: 13,
+                    color: '#EEEEF8',
+                  }}
+                  onFocus={e => { e.currentTarget.style.border = '1px solid rgba(124,110,255,0.5)'; }}
+                  onBlur={e => { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)'; }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 transition"
+                  style={{ color: '#454670' }}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                </button>
+              </div>
+              {errors.password && (
+                <p className="mt-1 ml-1 text-xs" style={{ color: '#EF4444' }}>{errors.password.message}</p>
+              )}
+            </div>
+
+            {/* Forgot Password */}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="text-xs transition"
+                style={{ color: '#7070A0' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#B59BF5'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#7070A0'; }}
+              >
+                Forgot Password?
+              </button>
+            </div>
+
+            {/* Root error */}
+            {errors.root && (
+              <div
+                className="rounded-xl px-4 py-2.5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}
+              >
+                {errors.root.message}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full font-semibold flex items-center justify-center gap-2 transition"
+              style={{
+                borderRadius: 12,
+                padding: '13px 0',
+                fontSize: 14,
+                background: isSubmitting ? 'rgba(196,181,253,0.5)' : '#C4B5FD',
+                color: '#160D30',
+                cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                border: 'none',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isSubmitting ? 'Signing in…' : 'Sign In'}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.07)' }} />
+            <span className="text-xs" style={{ color: '#454670' }}>or continue with</span>
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.07)' }} />
+          </div>
+
+          {/* Social buttons */}
+          <div className="flex items-center justify-center gap-4">
+            {/* Google */}
+            <button
+              type="button"
+              className="h-12 w-12 rounded-xl flex items-center justify-center transition"
+              style={{ background: '#1D1E2E', border: '1px solid rgba(255,255,255,0.08)' }}
+              aria-label="Continue with Google"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+              </svg>
+            </button>
+
+            {/* Apple */}
+            <button
+              type="button"
+              className="h-12 w-12 rounded-xl flex items-center justify-center transition"
+              style={{ background: '#1D1E2E', border: '1px solid rgba(255,255,255,0.08)' }}
+              aria-label="Continue with Apple"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white">
+                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
+              </svg>
+            </button>
+
+            {/* Facebook */}
+            <button
+              type="button"
+              className="h-12 w-12 rounded-xl flex items-center justify-center transition"
+              style={{ background: '#1D1E2E', border: '1px solid rgba(255,255,255,0.08)' }}
+              aria-label="Continue with Facebook"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Register link */}
+          <p className="text-center text-sm" style={{ color: '#7070A0' }}>
+            Not a member?{' '}
+            <Link
+              href={redirectPlatform ? `/register?redirect=${redirectPlatform}` : '/register'}
+              className="font-semibold transition"
+              style={{ color: '#B59BF5' }}
+            >
+              Register now
+            </Link>
+          </p>
+        </div>
+      </div>
+
+      {/* ── RIGHT: Dark Branded Panel ── */}
+      <div
+        className="hidden lg:flex items-center justify-center w-1/2 m-4 rounded-3xl relative overflow-hidden"
+        style={{
+          background: 'linear-gradient(135deg, #13141F 0%, #181030 50%, #1E1245 100%)',
+          border: '1px solid rgba(124,110,255,0.15)',
+        }}
+      >
+        {/* Glow blobs */}
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            width: 320,
+            height: 320,
+            top: -60,
+            right: -60,
+            background: 'radial-gradient(circle, rgba(124,110,255,0.20) 0%, transparent 70%)',
+          }}
+        />
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            width: 220,
+            height: 220,
+            bottom: -40,
+            left: -40,
+            background: 'radial-gradient(circle, rgba(181,155,245,0.12) 0%, transparent 70%)',
+          }}
+        />
+
+        {/* Content */}
+        <div className="relative flex flex-col items-center text-center px-10 gap-6">
+          <div
+            className="h-20 w-20 rounded-2xl flex items-center justify-center font-bold text-3xl"
+            style={{ background: 'linear-gradient(135deg, #7C6EFF 0%, #B59BF5 100%)', color: '#fff' }}
+          >
+            E
+          </div>
+          <div>
+            <p className="font-bold" style={{ fontSize: 24, color: '#EEEEF8' }}>EHB Portal</p>
+            <p className="mt-2 leading-relaxed" style={{ fontSize: 13, color: '#7070A0', maxWidth: 280 }}>
+              Your unified identity across all EHB platforms — GoSellr, OLS, HPS, and more.
+            </p>
+          </div>
+
+          {/* Feature pills */}
+          <div className="flex flex-col gap-2 w-full mt-2">
+            {['Single sign-on across all platforms', 'Secure JWT-based authentication', 'Manage all your EHB services'].map((feat) => (
+              <div
+                key={feat}
+                className="flex items-center gap-2.5 px-4 py-3 rounded-xl"
+                style={{ background: 'rgba(124,110,255,0.08)', border: '1px solid rgba(124,110,255,0.15)' }}
+              >
+                <span className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ background: '#7C6EFF' }} />
+                <span style={{ fontSize: 12, color: '#A0A3C4' }}>{feat}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
+  );
+}
